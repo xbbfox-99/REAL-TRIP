@@ -168,6 +168,47 @@ export const BudgetView: React.FC = () => {
     };
   }, []);
 
+  const compressImageForOcr = (file: File): Promise<{ base64: string; mimeType: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let { width, height } = img;
+          const MAX_DIM = 1600; // Optimal resolution for Gemini OCR
+          if (width > MAX_DIM || height > MAX_DIM) {
+            if (width > height) {
+              height = Math.round((height * MAX_DIM) / width);
+              width = MAX_DIM;
+            } else {
+              width = Math.round((width * MAX_DIM) / height);
+              height = MAX_DIM;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            return resolve({ base64: (e.target?.result as string).split(',')[1], mimeType: file.type || 'image/jpeg' });
+          }
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          resolve({
+            base64: dataUrl.split(',')[1],
+            mimeType: 'image/jpeg',
+          });
+        };
+        img.onerror = () => reject(new Error('圖片載入失敗，請換一張清晰圖片'));
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleScan = async (e: React.ChangeEvent<HTMLInputElement>, isSplit: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -175,16 +216,8 @@ export const BudgetView: React.FC = () => {
     setIsScanning(true);
     setScanStatus('idle');
     try {
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.onload = (ev) => resolve((ev.target?.result as string).split(',')[1]);
-        reader.onerror = (err) => reject(err);
-      });
-      
-      reader.readAsDataURL(file);
-      const base64 = await base64Promise;
-      
-      const result = await scanReceipt(base64, file.type);
+      const { base64, mimeType } = await compressImageForOcr(file);
+      const result = await scanReceipt(base64, mimeType);
       
       if (result) {
         setScanStatus('success');

@@ -203,7 +203,7 @@ app.post('/api/gemini/scan-receipt', async (req, res) => {
               },
             },
           },
-          required: ['date', 'store', 'amount', 'items'],
+          required: ['amount'],
         },
       },
     });

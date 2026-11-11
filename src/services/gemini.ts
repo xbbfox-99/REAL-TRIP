@@ -244,7 +244,7 @@ async function scanReceiptClientSide(base64Image: string, mimeType: string, cust
             },
           },
         },
-        required: ['date', 'store', 'amount', 'items'],
+        required: ['amount'],
       },
     },
   });
