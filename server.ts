@@ -16,8 +16,8 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json({ limit: '25mb' }));
 
 // Initialize Gemini client server-side
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGeminiClient(customKey?: string): GoogleGenAI {
+  const apiKey = (customKey && customKey.trim()) || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not defined on the server.');
   }
@@ -36,13 +36,33 @@ function cleanJsonString(str: string): string {
   return str.replace(/```json\n?|\n?```/g, '').trim();
 }
 
+const DEFAULT_MODEL = 'gemini-3.8-flash';
+
+async function generateContentWithTimeout(ai: GoogleGenAI, params: any) {
+  try {
+    return await ai.models.generateContent({ ...params, model: DEFAULT_MODEL });
+  } catch (err: any) {
+    console.error(`Gemini model ${DEFAULT_MODEL} error:`, err.message || err);
+    throw err;
+  }
+}
+
+async function generateContentStreamWithFallback(ai: GoogleGenAI, params: any) {
+  try {
+    return await ai.models.generateContentStream({ ...params, model: DEFAULT_MODEL });
+  } catch (err: any) {
+    console.error(`Gemini stream model ${DEFAULT_MODEL} error:`, err.message || err);
+    throw err;
+  }
+}
+
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', hasKey: !!process.env.GEMINI_API_KEY });
+  res.json({ status: 'ok', hasKey: !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.API_KEY) });
 });
 
 // Endpoint: Stream destination guide
 app.post('/api/gemini/guide-stream', async (req, res) => {
-  const { title, query } = req.body;
+  const { title, query, apiKey } = req.body;
 
   if (!title) {
     res.status(400).json({ error: 'Title is required' });
@@ -51,7 +71,7 @@ app.post('/api/gemini/guide-stream', async (req, res) => {
 
   let ai: GoogleGenAI;
   try {
-    ai = getGeminiClient();
+    ai = getGeminiClient(apiKey);
   } catch (err: any) {
     console.error('Server Gemini Init Error:', err);
     res.status(500).json({ error: err.message || 'API key not configured' });
@@ -73,10 +93,7 @@ app.post('/api/gemini/guide-stream', async (req, res) => {
 5. 語氣親切活潑實用。`;
 
   try {
-    const stream = await ai.models.generateContentStream({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-    });
+    const stream = await generateContentStreamWithFallback(ai, { contents: prompt });
 
     for await (const chunk of stream) {
       if (chunk.text) {
@@ -94,7 +111,7 @@ app.post('/api/gemini/guide-stream', async (req, res) => {
 
 // Endpoint: Non-streaming destination guide
 app.post('/api/gemini/guide', async (req, res) => {
-  const { title, query } = req.body;
+  const { title, query, apiKey } = req.body;
 
   if (!title) {
     res.status(400).json({ error: 'Title is required' });
@@ -103,7 +120,7 @@ app.post('/api/gemini/guide', async (req, res) => {
 
   let ai: GoogleGenAI;
   try {
-    ai = getGeminiClient();
+    ai = getGeminiClient(apiKey);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'API key not configured' });
     return;
@@ -120,10 +137,7 @@ app.post('/api/gemini/guide', async (req, res) => {
 5. 語氣親切活潑實用。`;
 
   try {
-    const result = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-    });
+    const result = await generateContentWithTimeout(ai, { contents: prompt });
     res.json({ text: result.text || '暫時無法取得導覽資訊，請稍後再試。' });
   } catch (error: any) {
     console.error('Server Guide Error:', error);
@@ -133,7 +147,7 @@ app.post('/api/gemini/guide', async (req, res) => {
 
 // Endpoint: Multimodal receipt scanning
 app.post('/api/gemini/scan-receipt', async (req, res) => {
-  const { base64Image, mimeType } = req.body;
+  const { base64Image, mimeType, apiKey } = req.body;
 
   if (!base64Image) {
     res.status(400).json({ error: 'base64Image is required' });
@@ -142,92 +156,98 @@ app.post('/api/gemini/scan-receipt', async (req, res) => {
 
   let ai: GoogleGenAI;
   try {
-    ai = getGeminiClient();
+    ai = getGeminiClient(apiKey);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'API key not configured' });
     return;
   }
 
-  const prompt = `你是一個精通日文、韓文與中文的多國語言收據與發票專家。請從這張旅遊發票或收據圖檔（不論是韓國韓文發票收據、日本發票收據、還是其他各國發票）中精確提取相關資訊。
+  const prompt = `你是一個精通日文、韓文與中文的多國語言收據與發票專家。請從這張旅遊發票或收據圖檔（不論是韓國韓文發票收據、日本發票收據、美妝店 Innisfree / Olive Young、便利商店 CU / GS25、樂天瑪特，還是餐廳收據）中精確提取相關資訊。
 
 任務目標：
-1. **店名 (store)**: 辨識收據最上方的店家名稱（韓文或日文原名，例如：CU, GS25, Olive Young, 樂天瑪特, 餐廳店名等）。
-2. **日期 (date)**: 格式必須為 YYYY-MM-DD。若無年份則推斷為 2026 或 2025。
-3. **總金額 (amount)**: 找出最後實際支付的總金額（韓國「합계 / 받을금액 / 승인금액 / 결제금액」、日本「合計 / 税込合計」）。
-4. **小計/稅額 (preTaxAmount)**: 找出收據上的小計或未稅/過稅金額（「공급가액 / 부가세 / 小計」）。
+1. **店名 (store)**: 辨識收據最上方或內文的店家品牌與分店名稱（韓文/日文或中文，例如：이니스프리 明洞店 / Innisfree, CU, GS25, Olive Young, 樂天瑪特等）。若無直接店名，可依品牌商品名稱或地址推斷。
+2. **日期 (date)**: 格式必須為 YYYY-MM-DD（例如 2023-07-22）。
+3. **總金額 (amount)**: 找出最後「實際支付/結算」的金額數值（韓國取「합계 / 받은돈 / 결제금액 / 승인금액」，若有「할인금액 折扣」，務必取扣除折扣後的最終實付「합계」；日本取「合計 / 税込合計」）。
+4. **小計/課稅金額 (preTaxAmount)**: 找出收據上的過稅/課稅金額（例如「과세금액 / 공급가액 / 부가세 / 小計」）。
 5. **明細 (items)**: 
    - 提取所有消費品項。
    - name: 原始韓文/日文品項名稱。
-   - translatedName: 精確且生動的繁體中文翻譯（讓旅客一眼秒懂買了什麼，例如：香蕉牛奶、黑豬肉套餐、黑咖啡等）。
-   - price: 該項目的金額（數值）。
+   - translatedName: 精確且生動的繁體中文翻譯（例如：黑茶青年修護精華、綠茶籽玻尿酸精華、玻尿酸活力面膜、魚腥草能量面膜等）。
+   - price: 該項目的最終小計金額（數值）。
 
-注意事項：
-- 支援韓元 (KRW) 與日圓 (JPY) 發票與收據格式。
-- 優先讀取印刷體文字，忽略手寫塗鴉。
-- 移除數字中的逗號與幣別符號。
-- 嚴格遵守 JSON 格式回傳。`;
+請務必只回傳合法的 JSON 物件，格式如下：
+{
+  "store": "이니스프리 明洞1街店",
+  "date": "2023-07-22",
+  "amount": 149100,
+  "preTaxAmount": 135550,
+  "items": [
+    { "name": "IF. 블랙티 유스 인핸싱 앰플", "translatedName": "黑茶青年修護精華", "price": 78400 }
+  ]
+}`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: {
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              data: base64Image,
-              mimeType: mimeType || 'image/jpeg',
-            },
+    const response = await generateContentWithTimeout(ai, {
+      contents: [
+        prompt,
+        {
+          inlineData: {
+            mimeType: mimeType || 'image/jpeg',
+            data: base64Image,
           },
-        ],
-      },
+        },
+      ],
       config: {
         responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            date: { type: Type.STRING, description: '日期 (YYYY-MM-DD)' },
-            store: { type: Type.STRING, description: '店家名稱' },
-            amount: { type: Type.NUMBER, description: '總金額 (合計)' },
-            preTaxAmount: { type: Type.NUMBER, description: '已稅金額 (小計)' },
-            items: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING, description: '日文或韓文原名' },
-                  translatedName: { type: Type.STRING, description: '繁體中文翻譯' },
-                  price: { type: Type.NUMBER, description: '金額' },
-                },
-                required: ['name', 'translatedName', 'price'],
-              },
-            },
-          },
-          required: ['amount'],
-        },
       },
     });
 
     const rawText = response.text || '{}';
-    const cleanedText = cleanJsonString(rawText);
-    const data = JSON.parse(cleanedText);
+    let data: any = {};
+    try {
+      const cleanText = cleanJsonString(rawText);
+      data = JSON.parse(cleanText);
+    } catch {
+      const match = rawText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { data = JSON.parse(match[0]); } catch {}
+      }
+    }
+
+    const parseNum = (val: any) => {
+      if (typeof val === 'number') return isNaN(val) ? 0 : val;
+      if (typeof val === 'string') {
+        const cleaned = val.replace(/,/g, '').replace(/[^0-9.]/g, '');
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? 0 : num;
+      }
+      return 0;
+    };
 
     res.json({
       date: data.date || new Date().toISOString().split('T')[0],
-      store: data.store || '未知店家',
-      amount: Number(data.amount) || 0,
-      preTaxAmount: data.preTaxAmount ? Number(data.preTaxAmount) : undefined,
+      store: data.store || '日本/韓國在地店家',
+      amount: parseNum(data.amount),
+      preTaxAmount: data.preTaxAmount ? parseNum(data.preTaxAmount) : undefined,
       items: (data.items || []).map((item: any) => ({
         name: item.name || '項目',
         translatedName: item.translatedName || '未翻譯',
-        price: Number(item.price) || 0,
+        price: parseNum(item.price),
       })),
     });
   } catch (error: any) {
     console.error('Server Receipt Scan Error:', error);
     const message = error.message || String(error);
-    if (message.includes('429') || message.includes('quota')) {
+    if (message.includes('SERVER_GEMINI_TIMEOUT')) {
+      res.status(504).json({ error: 'SERVER_GEMINI_TIMEOUT' });
+      return;
+    }
+    if (message.includes('429') || message.includes('quota') || message.includes('QUOTA')) {
       res.status(429).json({ error: 'QUOTA_EXCEEDED' });
+      return;
+    }
+    if (message.includes('API_KEY') || message.includes('API key') || message.includes('key is not defined')) {
+      res.status(500).json({ error: 'NO_API_KEY_NEEDS_KEY' });
       return;
     }
     res.status(500).json({ error: message || 'Scan failed' });

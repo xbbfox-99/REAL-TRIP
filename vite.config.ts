@@ -5,12 +5,7 @@ import {defineConfig, loadEnv} from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
-  const apiKey = process.env.GEMINI_API_KEY || env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || '';
   return {
-    define: {
-      'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(apiKey),
-    },
     plugins: [
       react(), 
       tailwindcss(),

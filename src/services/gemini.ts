@@ -84,12 +84,13 @@ export async function getDestinationGuideStream(
   }
 
   try {
+    const apiKey = getStoredGeminiApiKey();
     const response = await fetch('/api/gemini/guide-stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ title, query }),
+      body: JSON.stringify({ title, query, apiKey }),
     });
 
     if (!response.ok) {
@@ -149,12 +150,13 @@ export async function getDestinationGuide(title: string, query: string): Promise
   }
 
   try {
+    const apiKey = getStoredGeminiApiKey();
     const response = await fetch('/api/gemini/guide', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ title, query }),
+      body: JSON.stringify({ title, query, apiKey }),
     });
 
     if (!response.ok) {
@@ -187,96 +189,36 @@ export function setStoredGeminiApiKey(key: string): void {
   }
 }
 
-async function scanReceiptClientSide(base64Image: string, mimeType: string, customApiKey?: string): Promise<ScannedReceipt | null> {
-  const apiKey = customApiKey || getStoredGeminiApiKey();
+export async function scanReceipt(base64Image: string, mimeType: string): Promise<ScannedReceipt | null> {
+  console.log('🚀 Starting Travel Receipt AI Scan via server endpoint...');
+
+  const apiKey = getStoredGeminiApiKey();
   if (!apiKey) {
-    return null;
+    throw new Error('NO_API_KEY_NEEDS_KEY');
   }
 
-  const { GoogleGenAI, Type } = await import('@google/genai');
-  const ai = new GoogleGenAI({ apiKey });
-
-  const prompt = `你是一個精通日文、韓文與中文的多國語言收據與發票專家。請從這張旅遊發票或收據圖檔（不論是韓國韓文發票收據、日本發票收據、還是其他各國發票）中精確提取相關資訊。
-
-任務目標：
-1. **店名 (store)**: 辨識收據最上方的店家名稱（韓文或日文原名，例如：CU, GS25, Olive Young, 樂天瑪特, 餐廳店名等）。
-2. **日期 (date)**: 格式必須為 YYYY-MM-DD。若無年份則推斷為 2026 或 2025。
-3. **總金額 (amount)**: 找出最後實際支付的總金額（韓國「합계 / 받을금액 / 승인금액 / 결제금액」、日本「合計 / 税込合計」）。
-4. **小計/稅額 (preTaxAmount)**: 找出收據上的小計或未稅/過稅金額（「공급가액 / 부가세 / 小計」）。
-5. **明細 (items)**: 
-   - 提取所有消費品項。
-   - name: 原始韓文/日文品項名稱。
-   - translatedName: 精確且生動的繁體中文翻譯（讓旅客一眼秒懂買了什麼，例如：香蕉牛奶、黑豬肉套餐、黑咖啡等）。
-   - price: 該項目的金額（數值）。`;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
-    contents: {
-      parts: [
-        { text: prompt },
-        {
-          inlineData: {
-            data: base64Image,
-            mimeType: mimeType || 'image/jpeg',
-          },
-        },
-      ],
-    },
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          date: { type: Type.STRING, description: '日期 (YYYY-MM-DD)' },
-          store: { type: Type.STRING, description: '店家名稱' },
-          amount: { type: Type.NUMBER, description: '總金額 (合計)' },
-          preTaxAmount: { type: Type.NUMBER, description: '已稅金額 (小計)' },
-          items: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING, description: '日文或韓文原名' },
-                translatedName: { type: Type.STRING, description: '繁體中文翻譯' },
-                price: { type: Type.NUMBER, description: '金額' },
-              },
-              required: ['name', 'translatedName', 'price'],
-            },
-          },
-        },
-        required: ['amount'],
-      },
-    },
-  });
-
-  const rawText = response.text || '{}';
-  const cleanJson = rawText.replace(/```json\n?|\n?```/g, '').trim();
-  const data = JSON.parse(cleanJson);
-
-  return {
-    date: data.date || new Date().toISOString().split('T')[0],
-    store: data.store || '韓國/日本店家',
-    amount: Number(data.amount) || 0,
-    preTaxAmount: data.preTaxAmount ? Number(data.preTaxAmount) : undefined,
-    items: (data.items || []).map((item: any) => ({
-      name: item.name || '項目',
-      translatedName: item.translatedName || '未翻譯',
-      price: Number(item.price) || 0,
-    })),
-  };
-}
-
-export async function scanReceipt(base64Image: string, mimeType: string): Promise<ScannedReceipt | null> {
-  console.log('🚀 Starting Travel Receipt AI Scan...');
-
   try {
-    const response = await fetch('/api/gemini/scan-receipt', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ base64Image, mimeType }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    let response: Response;
+    try {
+      response = await fetch('/api/gemini/scan-receipt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({ base64Image, mimeType, apiKey }),
+      });
+    } catch (fetchErr: any) {
+      if (fetchErr.name === 'AbortError') {
+        throw new Error('辨識請求處理時間較長，請檢查網路連線或重新嘗試');
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (response.status === 429) {
       throw new Error('QUOTA_EXCEEDED');
@@ -297,39 +239,23 @@ export async function scanReceipt(base64Image: string, mimeType: string): Promis
       };
     }
 
-    // If server returned 405 (e.g. GitHub Pages static hosting) or 404
-    if (response.status === 405 || response.status === 404) {
-      console.warn(`Server endpoint returned ${response.status} (likely static GitHub Pages host). Attempting client-side scan...`);
-      const clientResult = await scanReceiptClientSide(base64Image, mimeType).catch((err) => {
-        console.error("Client side scan failed:", err);
-        return null;
-      });
-      if (clientResult) {
-        return clientResult;
-      }
-      if (!getStoredGeminiApiKey()) {
-        throw new Error('NO_API_KEY_NEEDS_KEY');
-      }
-      throw new Error('STATIC_HOST_NO_SERVER');
+    const contentType = response.headers.get('content-type') || '';
+    let errJson: any = {};
+    if (contentType.includes('application/json')) {
+      errJson = await response.json().catch(() => ({}));
     }
 
-    const errJson = await response.json().catch(() => ({}));
-    throw new Error(errJson.error || `Server error: ${response.status}`);
-  } catch (error: any) {
-    if (error.message === 'NO_API_KEY_NEEDS_KEY' || error.message === 'STATIC_HOST_NO_SERVER') {
-      throw error;
+    if (response.status === 504 || errJson.error === 'SERVER_GEMINI_TIMEOUT') {
+      throw new Error('辨識連線逾時。請於「Key 設定」確認或重新填入您的 Gemini API Key！');
     }
-
-    // Try client-side scan fallback on network / fetch error
-    try {
-      const clientResult = await scanReceiptClientSide(base64Image, mimeType);
-      if (clientResult) return clientResult;
-    } catch {
-      // ignore fallback error
-    }
-
-    if (!getStoredGeminiApiKey()) {
+    if (response.status === 400 || response.status === 500 || errJson.error === 'NO_API_KEY_NEEDS_KEY' || errJson.error?.includes('API key')) {
       throw new Error('NO_API_KEY_NEEDS_KEY');
+    }
+
+    throw new Error(errJson.error || `Server responded with status ${response.status}`);
+  } catch (error: any) {
+    if (error.message === 'NO_API_KEY_NEEDS_KEY') {
+      throw error;
     }
 
     console.error('❌ Receipt Scan Error:', error);

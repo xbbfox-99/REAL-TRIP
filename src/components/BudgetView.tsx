@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Plus, Trash2, Users, User, ArrowRightLeft, Loader2, CheckCircle2, GripVertical, List, JapaneseYen, PieChart, X, ChevronUp, ChevronDown, Download } from 'lucide-react';
+import { Camera, Plus, Trash2, Users, User, ArrowRightLeft, Loader2, CheckCircle2, GripVertical, List, JapaneseYen, PieChart, X, ChevronUp, ChevronDown, Download, Key } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart as RePieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -7,7 +7,7 @@ import { collection, addDoc, deleteDoc, onSnapshot, query, doc, orderBy } from '
 import { db, auth } from '../lib/firebase';
 import { JPY_TWD, KRW_TWD } from '../constants';
 import { Expense, SplitExpense, CurrencyType } from '../types';
-import { scanReceipt } from '../services/gemini';
+import { scanReceipt, getStoredGeminiApiKey, setStoredGeminiApiKey } from '../services/gemini';
 import { cn } from '../lib/utils';
 import { useTrip } from '../context/TripContext';
 
@@ -134,7 +134,10 @@ export const BudgetView: React.FC = () => {
   
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [scanSuccessInfo, setScanSuccessInfo] = useState<{ store: string; amount: number; itemCount: number } | null>(null);
   const [showItemsFor, setShowItemsFor] = useState<string | number | null>(null);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const splitFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -176,7 +179,7 @@ export const BudgetView: React.FC = () => {
         img.onload = () => {
           const canvas = document.createElement('canvas');
           let { width, height } = img;
-          const MAX_DIM = 1600; // Optimal resolution for Gemini OCR
+          const MAX_DIM = 1000; // Ultra-fast OCR resolution (~80KB payload)
           if (width > MAX_DIM || height > MAX_DIM) {
             if (width > height) {
               height = Math.round((height * MAX_DIM) / width);
@@ -195,7 +198,7 @@ export const BudgetView: React.FC = () => {
           ctx.fillStyle = '#FFFFFF';
           ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.70);
           resolve({
             base64: dataUrl.split(',')[1],
             mimeType: 'image/jpeg',
@@ -221,25 +224,39 @@ export const BudgetView: React.FC = () => {
       
       if (result) {
         setScanStatus('success');
+        setScanSuccessInfo({
+          store: result.store || '熱門店家',
+          amount: result.amount || 0,
+          itemCount: result.items ? result.items.length : 0,
+        });
         if (isSplit) {
           const splitAmountInput = document.getElementById('splitAmount') as HTMLInputElement;
           const splitNameInput = document.getElementById('splitName') as HTMLInputElement;
           const splitDateInput = document.getElementById('splitDate') as HTMLInputElement;
-          if (splitAmountInput) splitAmountInput.value = result.amount.toString();
-          if (splitNameInput) splitNameInput.value = result.store || '熱門景點/餐廳';
-          if (splitDateInput) splitDateInput.value = result.date || splitDateInput.value;
+          if (splitAmountInput) {
+            splitAmountInput.value = result.amount ? result.amount.toString() : '';
+            splitAmountInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          if (splitNameInput) {
+            splitNameInput.value = result.store || '熱門景點/餐廳';
+            splitNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          if (splitDateInput) {
+            splitDateInput.value = result.date || splitDateInput.value;
+            splitDateInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
         } else {
           setFormData(prev => ({
             ...prev,
-            amount: result.amount.toString(),
-            preTaxAmount: result.preTaxAmount?.toString() || '',
-            name: result.store || prev.name,
+            amount: result.amount ? result.amount.toString() : prev.amount,
+            preTaxAmount: result.preTaxAmount ? result.preTaxAmount.toString() : '',
+            name: result.store ? result.store : prev.name,
             store: result.store || '',
             date: result.date || prev.date,
             items: (result.items || []).filter(i => i.price > 0 || i.name)
           }));
         }
-        setTimeout(() => setScanStatus('idle'), 3000);
+        setTimeout(() => setScanStatus('idle'), 5000);
       } else {
         setScanStatus('error');
         alert('辨識失敗，請確保照片清晰並再次嘗試。');
@@ -247,10 +264,15 @@ export const BudgetView: React.FC = () => {
     } catch (err: any) {
       console.error("Scanning Error:", err);
       setScanStatus('error');
-      if (err.message === 'QUOTA_EXCEEDED' || err.message?.includes('429')) {
-        alert('目前辨識請求較多，請稍後再試。');
+      if (err.message === 'NO_API_KEY_NEEDS_KEY' || err.message?.includes('API_KEY')) {
+        setApiKeyInput(getStoredGeminiApiKey());
+        setShowApiKeyModal(true);
+      } else if (err.message === 'QUOTA_EXCEEDED' || err.message?.includes('429')) {
+        alert('目前 AI 辨識請求較多或免費額度已滿。您可以設定個人的 Gemini API Key 繼續免費使用！');
+        setApiKeyInput(getStoredGeminiApiKey());
+        setShowApiKeyModal(true);
       } else {
-        alert('辨識遇到問題，請確保發票/收據照片清晰並重新上傳。');
+        alert(`辨識遇到問題：${err.message || '請確認發票照片清晰'}。您也可以點擊「設定 API Key」設定自己的 Gemini 金鑰。`);
       }
     } finally {
       setIsScanning(false);
@@ -752,6 +774,23 @@ export const BudgetView: React.FC = () => {
                 )}
                 <input type="file" ref={fileInputRef} onChange={(e) => handleScan(e, false)} className="hidden" accept="image/*" />
               </div>
+
+              <AnimatePresence>
+                {scanSuccessInfo && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded flex items-center justify-between shadow-sm"
+                  >
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>🎉 已帶入：<b>{scanSuccessInfo.store}</b> (${scanSuccessInfo.amount.toLocaleString()}{scanSuccessInfo.itemCount > 0 ? `，含 ${scanSuccessInfo.itemCount} 項明細` : ''})</span>
+                    </div>
+                    <button onClick={() => setScanSuccessInfo(null)} className="text-emerald-600 hover:text-emerald-800 text-xs font-bold px-1">✕</button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -1547,6 +1586,66 @@ export const BudgetView: React.FC = () => {
               >
                 關閉分析
               </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Gemini API Key Modal */}
+      <AnimatePresence>
+        {showApiKeyModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white w-full max-w-md p-6 border border-zinc-200 shadow-2xl relative space-y-4"
+            >
+              <div className="flex justify-between items-center border-b border-zinc-100 pb-3">
+                <div className="flex items-center gap-2 text-primary">
+                  <Key className="w-5 h-5" />
+                  <h3 className="font-black text-lg text-zinc-900 tracking-tight">Gemini AI Key 設定</h3>
+                </div>
+                <button onClick={() => setShowApiKeyModal(false)} className="p-1 text-zinc-400 hover:text-zinc-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-zinc-600 font-medium leading-relaxed">
+                發票 AI 辨識與景點導覽需要 Gemini API Key。若系統伺服器端未設定 Key，請在此填寫您的個人 Gemini API Key 即可順暢辨識（免費額度充足）：
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Gemini API Key</label>
+                <input 
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full px-3 py-2.5 text-sm font-mono border border-zinc-300 focus:outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStoredGeminiApiKey(apiKeyInput);
+                    setShowApiKeyModal(false);
+                  }}
+                  className="w-full bg-primary text-white py-3 text-xs font-bold uppercase tracking-wider hover:bg-primary/90 transition-all shadow"
+                >
+                  儲存並關閉
+                </button>
+                <a 
+                  href="https://aistudio.google.com/app/apikey" 
+                  target="_blank" 
+                  rel="noreferrer"
+                  className="w-full text-center text-xs font-semibold text-rose-500 hover:underline py-2"
+                >
+                  👉 免費取得 Google Gemini API Key
+                </a>
+              </div>
             </motion.div>
           </div>
         )}
