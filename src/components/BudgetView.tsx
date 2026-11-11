@@ -887,9 +887,9 @@ export const BudgetView: React.FC = () => {
                       本頁面: {memberExpenses.length} 筆 / {currentTrip.name}總計: {tripExpenses.length} 筆
                     </span>
                     {isMigrating && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
-                    {tripExpenses.length === 0 && !isMigrating && (
-                      <span className="flex items-center gap-1 text-[8px] font-black text-rose-500 uppercase tracking-widest bg-rose-50 px-2 py-0.5 animate-pulse">
-                        <Loader2 className="w-2 h-2 animate-spin" /> 連線中
+                    {!isMigrating && (
+                      <span className="flex items-center gap-1 text-[8px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-2 py-0.5">
+                        <CheckCircle2 className="w-2.5 h-2.5" /> 雲端已連線
                       </span>
                     )}
                   </div>
