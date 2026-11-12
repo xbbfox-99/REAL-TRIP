@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Plus, Trash2, Users, User, ArrowRightLeft, Loader2, CheckCircle2, GripVertical, List, JapaneseYen, PieChart, X, ChevronUp, ChevronDown, Download, Key } from 'lucide-react';
+import { Camera, Plus, Trash2, Users, User, ArrowRightLeft, Loader2, CheckCircle2, GripVertical, List, JapaneseYen, PieChart, X, ChevronUp, ChevronDown, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart as RePieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -7,7 +7,7 @@ import { collection, addDoc, deleteDoc, onSnapshot, query, doc, orderBy } from '
 import { db, auth } from '../lib/firebase';
 import { JPY_TWD, KRW_TWD } from '../constants';
 import { Expense, SplitExpense, CurrencyType } from '../types';
-import { scanReceipt, getStoredGeminiApiKey, setStoredGeminiApiKey } from '../services/gemini';
+import { scanReceipt } from '../services/gemini';
 import { cn } from '../lib/utils';
 import { useTrip } from '../context/TripContext';
 
@@ -136,8 +136,6 @@ export const BudgetView: React.FC = () => {
   const [scanStatus, setScanStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [scanSuccessInfo, setScanSuccessInfo] = useState<{ store: string; amount: number; itemCount: number } | null>(null);
   const [showItemsFor, setShowItemsFor] = useState<string | number | null>(null);
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const splitFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -264,16 +262,7 @@ export const BudgetView: React.FC = () => {
     } catch (err: any) {
       console.error("Scanning Error:", err);
       setScanStatus('error');
-      if (err.message === 'NO_API_KEY_NEEDS_KEY' || err.message?.includes('API_KEY')) {
-        setApiKeyInput(getStoredGeminiApiKey());
-        setShowApiKeyModal(true);
-      } else if (err.message === 'QUOTA_EXCEEDED' || err.message?.includes('429')) {
-        alert('目前 AI 辨識請求較多或免費額度已滿。您可以設定個人的 Gemini API Key 繼續免費使用！');
-        setApiKeyInput(getStoredGeminiApiKey());
-        setShowApiKeyModal(true);
-      } else {
-        alert(`辨識遇到問題：${err.message || '請確認發票照片清晰'}。您也可以點擊「設定 API Key」設定自己的 Gemini 金鑰。`);
-      }
+      alert(`辨識遭遇問題：${err.message || '請確認發票照片清晰並重試'}`);
     } finally {
       setIsScanning(false);
       e.target.value = '';
@@ -1591,65 +1580,6 @@ export const BudgetView: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Gemini API Key Modal */}
-      <AnimatePresence>
-        {showApiKeyModal && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white w-full max-w-md p-6 border border-zinc-200 shadow-2xl relative space-y-4"
-            >
-              <div className="flex justify-between items-center border-b border-zinc-100 pb-3">
-                <div className="flex items-center gap-2 text-primary">
-                  <Key className="w-5 h-5" />
-                  <h3 className="font-black text-lg text-zinc-900 tracking-tight">Gemini AI Key 設定</h3>
-                </div>
-                <button onClick={() => setShowApiKeyModal(false)} className="p-1 text-zinc-400 hover:text-zinc-600">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <p className="text-xs text-zinc-600 font-medium leading-relaxed">
-                發票 AI 辨識與景點導覽需要 Gemini API Key。若系統伺服器端未設定 Key，請在此填寫您的個人 Gemini API Key 即可順暢辨識（免費額度充足）：
-              </p>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Gemini API Key</label>
-                <input 
-                  type="password"
-                  value={apiKeyInput}
-                  onChange={(e) => setApiKeyInput(e.target.value)}
-                  placeholder="AIzaSy..."
-                  className="w-full px-3 py-2.5 text-sm font-mono border border-zinc-300 focus:outline-none focus:border-primary"
-                />
-              </div>
-
-              <div className="flex flex-col gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStoredGeminiApiKey(apiKeyInput);
-                    setShowApiKeyModal(false);
-                  }}
-                  className="w-full bg-primary text-white py-3 text-xs font-bold uppercase tracking-wider hover:bg-primary/90 transition-all shadow"
-                >
-                  儲存並關閉
-                </button>
-                <a 
-                  href="https://aistudio.google.com/app/apikey" 
-                  target="_blank" 
-                  rel="noreferrer"
-                  className="w-full text-center text-xs font-semibold text-rose-500 hover:underline py-2"
-                >
-                  👉 免費取得 Google Gemini API Key
-                </a>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };

@@ -162,29 +162,12 @@ app.post('/api/gemini/scan-receipt', async (req, res) => {
     return;
   }
 
-  const prompt = `你是一個精通日文、韓文與中文的多國語言收據與發票專家。請從這張旅遊發票或收據圖檔（不論是韓國韓文發票收據、日本發票收據、美妝店 Innisfree / Olive Young、便利商店 CU / GS25、樂天瑪特，還是餐廳收據）中精確提取相關資訊。
-
-任務目標：
-1. **店名 (store)**: 辨識收據最上方或內文的店家品牌與分店名稱（韓文/日文或中文，例如：이니스프리 明洞店 / Innisfree, CU, GS25, Olive Young, 樂天瑪特等）。若無直接店名，可依品牌商品名稱或地址推斷。
-2. **日期 (date)**: 格式必須為 YYYY-MM-DD（例如 2023-07-22）。
-3. **總金額 (amount)**: 找出最後「實際支付/結算」的金額數值（韓國取「합계 / 받은돈 / 결제금액 / 승인금액」，若有「할인금액 折扣」，務必取扣除折扣後的最終實付「합계」；日本取「合計 / 税込合計」）。
-4. **小計/課稅金額 (preTaxAmount)**: 找出收據上的過稅/課稅金額（例如「과세금액 / 공급가액 / 부가세 / 小計」）。
-5. **明細 (items)**: 
-   - 提取所有消費品項。
-   - name: 原始韓文/日文品項名稱。
-   - translatedName: 精確且生動的繁體中文翻譯（例如：黑茶青年修護精華、綠茶籽玻尿酸精華、玻尿酸活力面膜、魚腥草能量面膜等）。
-   - price: 該項目的最終小計金額（數值）。
-
-請務必只回傳合法的 JSON 物件，格式如下：
-{
-  "store": "이니스프리 明洞1街店",
-  "date": "2023-07-22",
-  "amount": 149100,
-  "preTaxAmount": 135550,
-  "items": [
-    { "name": "IF. 블랙티 유스 인핸싱 앰플", "translatedName": "黑茶青年修護精華", "price": 78400 }
-  ]
-}`;
+  const prompt = `你是一個精通日文、韓文與中文的多國語言收據與發票專家。請從這張旅遊發票或收據圖檔（韓國/日本發票、美妝店、超商、餐廳）精確提取相關資訊：
+1. store: 店家品牌與分店名稱（韓文/日文或中文，如：이니스프리 明洞店）。
+2. date: 日期格式 YYYY-MM-DD。
+3. amount: 最終實付金額（數值，扣除折扣後的最終結算總金額）。
+4. preTaxAmount: 課稅/過稅小計金額（數值，若有）。
+5. items: 提取品項名稱 (name)、繁體中文翻譯 (translatedName) 與價格 (price)。`;
 
   try {
     const response = await generateContentWithTimeout(ai, {
@@ -199,6 +182,29 @@ app.post('/api/gemini/scan-receipt', async (req, res) => {
       ],
       config: {
         responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            store: { type: Type.STRING, description: '店家名稱' },
+            date: { type: Type.STRING, description: '日期 YYYY-MM-DD' },
+            amount: { type: Type.NUMBER, description: '最終實付總金額' },
+            preTaxAmount: { type: Type.NUMBER, description: '未稅/過稅金額' },
+            items: {
+              type: Type.ARRAY,
+              description: '消費品項列表',
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING, description: '原始品項名稱' },
+                  translatedName: { type: Type.STRING, description: '繁體中文翻譯' },
+                  price: { type: Type.NUMBER, description: '品項金額' },
+                },
+                required: ['name', 'translatedName', 'price'],
+              },
+            },
+          },
+          required: ['store', 'date', 'amount', 'items'],
+        },
       },
     });
 

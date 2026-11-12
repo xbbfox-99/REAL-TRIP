@@ -84,17 +84,15 @@ export async function getDestinationGuideStream(
   }
 
   try {
-    const apiKey = getStoredGeminiApiKey();
     const response = await fetch('/api/gemini/guide-stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ title, query, apiKey }),
+      body: JSON.stringify({ title, query }),
     });
 
     if (!response.ok) {
-      // Stream fallback guide directly instead of outputting "SERVER RESPONDED WITH 405" error
       console.warn(`Guide API returned status ${response.status}. Using fallback guide.`);
       onChunk(buildFallbackGuide(title, query));
       return;
@@ -150,13 +148,12 @@ export async function getDestinationGuide(title: string, query: string): Promise
   }
 
   try {
-    const apiKey = getStoredGeminiApiKey();
     const response = await fetch('/api/gemini/guide', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ title, query, apiKey }),
+      body: JSON.stringify({ title, query }),
     });
 
     if (!response.ok) {
@@ -172,34 +169,19 @@ export async function getDestinationGuide(title: string, query: string): Promise
 }
 
 export function getStoredGeminiApiKey(): string {
-  return (
-    localStorage.getItem('user_gemini_api_key') ||
-    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
-    (import.meta as any).env?.GEMINI_API_KEY ||
-    ''
-  );
+  return '';
 }
 
-export function setStoredGeminiApiKey(key: string): void {
-  const trimmed = key.trim();
-  if (trimmed) {
-    localStorage.setItem('user_gemini_api_key', trimmed);
-  } else {
-    localStorage.removeItem('user_gemini_api_key');
-  }
+export function setStoredGeminiApiKey(_key: string): void {
+  // no-op
 }
 
 export async function scanReceipt(base64Image: string, mimeType: string): Promise<ScannedReceipt | null> {
   console.log('🚀 Starting Travel Receipt AI Scan via server endpoint...');
 
-  const apiKey = getStoredGeminiApiKey();
-  if (!apiKey) {
-    throw new Error('NO_API_KEY_NEEDS_KEY');
-  }
-
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
 
     let response: Response;
     try {
@@ -209,7 +191,7 @@ export async function scanReceipt(base64Image: string, mimeType: string): Promis
           'Content-Type': 'application/json',
         },
         signal: controller.signal,
-        body: JSON.stringify({ base64Image, mimeType, apiKey }),
+        body: JSON.stringify({ base64Image, mimeType }),
       });
     } catch (fetchErr: any) {
       if (fetchErr.name === 'AbortError') {
@@ -221,7 +203,7 @@ export async function scanReceipt(base64Image: string, mimeType: string): Promis
     }
 
     if (response.status === 429) {
-      throw new Error('QUOTA_EXCEEDED');
+      throw new Error('辨識請求較頻繁，請稍後重試。');
     }
 
     if (response.ok) {
@@ -246,26 +228,12 @@ export async function scanReceipt(base64Image: string, mimeType: string): Promis
     }
 
     if (response.status === 504 || errJson.error === 'SERVER_GEMINI_TIMEOUT') {
-      throw new Error('辨識連線逾時。請於「Key 設定」確認或重新填入您的 Gemini API Key！');
-    }
-    if (response.status === 400 || response.status === 500 || errJson.error === 'NO_API_KEY_NEEDS_KEY' || errJson.error?.includes('API key')) {
-      throw new Error('NO_API_KEY_NEEDS_KEY');
+      throw new Error('辨識連線逾時，請再試一次。');
     }
 
-    throw new Error(errJson.error || `Server responded with status ${response.status}`);
+    throw new Error(errJson.error || `辨識失敗（HTTP ${response.status}）`);
   } catch (error: any) {
-    if (error.message === 'NO_API_KEY_NEEDS_KEY') {
-      throw error;
-    }
-
     console.error('❌ Receipt Scan Error:', error);
-    if (error.message === 'QUOTA_EXCEEDED') {
-      throw error;
-    }
-    const message = error.message || String(error);
-    if (message.includes('429') || message.includes('quota')) {
-      throw new Error('QUOTA_EXCEEDED');
-    }
     throw error;
   }
 }
