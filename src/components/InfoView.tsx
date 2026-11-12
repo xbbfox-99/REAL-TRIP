@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plane, Home, Utensils, ShieldAlert, ExternalLink, MapPin, Plus, X, Loader2, ThumbsUp, ThumbsDown, CheckSquare, Square, ShoppingBag, Briefcase, Trash2, ChevronRight, ListChecks, Info, Sparkles } from 'lucide-react';
+import { Plane, Home, Utensils, ShieldAlert, ExternalLink, MapPin, Plus, X, Loader2, ThumbsUp, ThumbsDown, CheckSquare, Square, ShoppingBag, Briefcase, Trash2, ChevronRight, ListChecks, Info, Sparkles, ChevronUp, ChevronDown, GripVertical } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { db, auth } from '../lib/firebase';
 import { useTrip } from '../context/TripContext';
@@ -472,6 +473,95 @@ const ChecklistView: React.FC<{
     });
   };
 
+  const moveItem = async (itemId: string, direction: 'up' | 'down') => {
+    if (!checklist || !checklist.items) return;
+    const currentFilteredIndex = filteredItems.findIndex((item: any) => item.id === itemId);
+    if (currentFilteredIndex === -1) return;
+
+    const targetFilteredIndex = direction === 'up' ? currentFilteredIndex - 1 : currentFilteredIndex + 1;
+    if (targetFilteredIndex < 0 || targetFilteredIndex >= filteredItems.length) return;
+
+    const currentItem = filteredItems[currentFilteredIndex];
+    const targetItem = filteredItems[targetFilteredIndex];
+
+    const fullIndexCurrent = checklist.items.findIndex((item: any) => item.id === currentItem.id);
+    const fullIndexTarget = checklist.items.findIndex((item: any) => item.id === targetItem.id);
+
+    if (fullIndexCurrent === -1 || fullIndexTarget === -1) return;
+
+    const newItems = [...checklist.items];
+    newItems[fullIndexCurrent] = targetItem;
+    newItems[fullIndexTarget] = currentItem;
+
+    setChecklist((prev: any) => ({ ...prev, items: newItems }));
+
+    try {
+      await updateDoc(doc(db, 'checklists', docId), {
+        items: newItems,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `checklists/${docId}`);
+    }
+  };
+
+  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
+  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    setDraggedItemId(id);
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, id: string) => {
+    e.preventDefault();
+    if (draggedItemId && draggedItemId !== id) {
+      setDragOverItemId(id);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverItemId(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    setDragOverItemId(null);
+    const sourceId = draggedItemId || e.dataTransfer.getData('text/plain');
+    setDraggedItemId(null);
+    if (!sourceId || sourceId === targetId || !checklist?.items) return;
+
+    const currentFilteredIndex = filteredItems.findIndex((item: any) => item.id === sourceId);
+    const targetFilteredIndex = filteredItems.findIndex((item: any) => item.id === targetId);
+    if (currentFilteredIndex === -1 || targetFilteredIndex === -1) return;
+
+    const sourceItem = filteredItems[currentFilteredIndex];
+    const targetItem = filteredItems[targetFilteredIndex];
+
+    const sourceFullIndex = checklist.items.findIndex((item: any) => item.id === sourceItem.id);
+    if (sourceFullIndex === -1) return;
+
+    const newItems = [...checklist.items];
+    const [removed] = newItems.splice(sourceFullIndex, 1);
+    const targetFullIndex = newItems.findIndex((item: any) => item.id === targetItem.id);
+    if (targetFullIndex === -1) return;
+
+    const insertIndex = currentFilteredIndex < targetFilteredIndex ? targetFullIndex + 1 : targetFullIndex;
+    newItems.splice(insertIndex, 0, removed);
+
+    setChecklist((prev: any) => ({ ...prev, items: newItems }));
+
+    try {
+      await updateDoc(doc(db, 'checklists', docId), {
+        items: newItems,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `checklists/${docId}`);
+    }
+  };
+
   const filteredItems = checklist 
     ? (type === 'packing' 
         ? checklist.items.filter((item: any) => (item.category || '隨身行李') === selectedCategory)
@@ -496,12 +586,17 @@ const ChecklistView: React.FC<{
           {icon}
           {type === 'packing' ? selectedCategory : title}
         </div>
-        <div className="text-[10px] font-mono font-bold text-zinc-500 uppercase">
-          {filteredItems.filter((i: any) => i.completed).length} / {filteredItems.length}
+        <div className="flex items-center gap-3">
+          <span className="hidden sm:inline text-[9px] font-bold text-zinc-400">
+            可使用上下箭頭或拖曳調整順序
+          </span>
+          <div className="text-[10px] font-mono font-bold text-zinc-500 uppercase bg-zinc-100 px-2 py-0.5 rounded-sm">
+            {filteredItems.filter((i: any) => i.completed).length} / {filteredItems.length}
+          </div>
         </div>
       </div>
 
-      <div className="space-y-8 min-h-[300px]">
+      <div className="space-y-6 min-h-[300px]">
         {/* Category Tabs (Only for Packing List) */}
         {type === 'packing' && (
           <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar border-b border-border/30">
@@ -523,19 +618,67 @@ const ChecklistView: React.FC<{
           </div>
         )}
 
-        <div className={cn(
-          "grid gap-x-4 gap-y-1 animate-in fade-in duration-300",
-          filteredItems.length > 0 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"
-        )}>
-          {filteredItems.map((item: any) => (
-            <div key={item.id} className="flex items-center justify-between group py-2 px-1 hover:bg-surface/50 border-b border-border/20">
+        {/* Reorderable Items List */}
+        <div className="flex flex-col space-y-1.5 animate-in fade-in duration-300">
+          {filteredItems.map((item: any, idx: number) => (
+            <motion.div 
+              layout
+              key={item.id}
+              draggable
+              onDragStart={(e) => handleDragStart(e as any, item.id)}
+              onDragOver={(e) => handleDragOver(e as any, item.id)}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e as any, item.id)}
+              className={cn(
+                "flex items-center justify-between group py-2.5 px-3 bg-surface hover:bg-surface/90 border border-border/40 rounded-sm transition-all",
+                dragOverItemId === item.id && "border-primary bg-primary/5 ring-1 ring-primary/40",
+                draggedItemId === item.id && "opacity-40"
+              )}
+            >
+              {/* Drag Handle & Up/Down Movement Controls */}
+              <div className="flex items-center gap-0.5 mr-2 shrink-0">
+                <div 
+                  className="cursor-grab active:cursor-grabbing text-zinc-300 hover:text-zinc-600 p-1"
+                  title="拖曳以排序"
+                >
+                  <GripVertical className="w-3.5 h-3.5" />
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    moveItem(item.id, 'up');
+                  }}
+                  disabled={idx === 0}
+                  className="p-1 text-zinc-400 hover:text-zinc-900 disabled:opacity-20 hover:bg-zinc-100 rounded transition-colors"
+                  title="往上移動"
+                  aria-label="往上移動"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    moveItem(item.id, 'down');
+                  }}
+                  disabled={idx === filteredItems.length - 1}
+                  className="p-1 text-zinc-400 hover:text-zinc-900 disabled:opacity-20 hover:bg-zinc-100 rounded transition-colors"
+                  title="往下移動"
+                  aria-label="往下移動"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Checkbox and Item Name */}
               <button 
                 onClick={() => toggleItem(item.id)}
                 className="flex items-center gap-3 flex-1 text-left min-w-0"
               >
                 {item.completed ? (
                   <div 
-                    className="w-4 h-4 rounded-sm flex-shrink-0 flex items-center justify-center"
+                    className="w-4 h-4 rounded-sm flex-shrink-0 flex items-center justify-center shadow-xs"
                     style={{ backgroundColor: themeColor }}
                   >
                     <CheckSquare className="w-3 h-3 text-white" />
@@ -550,16 +693,22 @@ const ChecklistView: React.FC<{
                   {item.text}
                 </span>
               </button>
-              <button 
-                onClick={() => removeItem(item.id)}
-                className="opacity-0 group-hover:opacity-100 p-1 text-zinc-300 hover:text-rose-500 transition-all"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
+
+              {/* Delete button */}
+              <div className="flex items-center pl-2">
+                <button 
+                  onClick={() => removeItem(item.id)}
+                  className="opacity-40 group-hover:opacity-100 p-1 text-zinc-400 hover:text-rose-500 transition-all"
+                  title="刪除項目"
+                  aria-label="刪除項目"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </motion.div>
           ))}
           {filteredItems.length === 0 && (
-            <div className="col-span-full py-12 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">
+            <div className="py-12 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest bg-surface/30 border border-dashed border-border/50">
               尚無項目，請由下方新增
             </div>
           )}
